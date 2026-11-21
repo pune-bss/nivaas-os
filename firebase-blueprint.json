@@ -1,0 +1,494 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated user account and multi-tenant role assignment.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "phone": { "type": "string", "maxLength": 20, "pattern": "^(\\+91[6-9]\\d{9})?$" },
+        "role": {
+          "type": "string",
+          "enum": ["super_admin", "company_admin", "sales_manager", "sales_executive", "accountant", "receptionist", "pending_owner"]
+        },
+        "companyId": { "type": "string", "maxLength": 128 },
+        "status": {
+          "type": "string",
+          "enum": ["active", "invited", "suspended", "pending_approval"]
+        },
+        "totpEnabled": { "type": "boolean" },
+        "preferredLanguage": { "type": "string", "enum": ["en", "hi", "mr"] },
+        "dpdpConsentAt": { "type": "string", "format": "date-time" },
+        "monthlyTargetInr": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "isDeleted": { "type": "boolean" }
+      },
+      "required": ["uid", "displayName", "role", "status", "createdAt", "updatedAt", "isDeleted"]
+    },
+    "UserPrivateSecurity": {
+      "title": "UserPrivateSecurity",
+      "description": "Isolated TOTP 2FA secret and session security metadata.",
+      "type": "object",
+      "properties": {
+        "totpSecret": { "type": "string", "maxLength": 128 },
+        "sessionEpoch": { "type": "number" },
+        "dpdpDeletionRequestedAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["sessionEpoch", "updatedAt"]
+    },
+    "Company": {
+      "title": "Company",
+      "description": "Tenant organization (builder, brokerage, consultancy).",
+      "type": "object",
+      "properties": {
+        "companyId": { "type": "string", "minLength": 2, "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "businessType": { "type": "string", "enum": ["agency", "broker", "builder", "consultant"] },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "ownerEmail": { "type": "string", "format": "email", "maxLength": 200 },
+        "phone": { "type": "string", "maxLength": 20 },
+        "city": { "type": "string", "maxLength": 80 },
+        "state": { "type": "string", "maxLength": 80 },
+        "pinCode": { "type": "string", "maxLength": 10 },
+        "gstNumber": { "type": "string", "maxLength": 20 },
+        "reraNumber": { "type": "string", "maxLength": 60 },
+        "status": { "type": "string", "enum": ["pending_approval", "active", "suspended"] },
+        "planId": { "type": "string", "enum": ["free", "starter", "pro", "enterprise"] },
+        "userLimit": { "type": "number" },
+        "propertyLimit": { "type": "number" },
+        "trialEndsAt": { "type": "string", "format": "date-time" },
+        "logoUrl": { "type": "string", "maxLength": 500 },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "isDeleted": { "type": "boolean" }
+      },
+      "required": ["companyId", "name", "businessType", "ownerUid", "status", "planId", "createdBy", "createdAt", "updatedAt", "isDeleted"]
+    },
+    "Invitation": {
+      "title": "Invitation",
+      "description": "Employee invitation record scoped to a company.",
+      "type": "object",
+      "properties": {
+        "companyId": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "displayName": { "type": "string", "maxLength": 120 },
+        "role": { "type": "string", "enum": ["company_admin", "sales_manager", "sales_executive", "accountant", "receptionist"] },
+        "inviteCode": { "type": "string", "minLength": 8, "maxLength": 64 },
+        "status": { "type": "string", "enum": ["pending", "accepted", "revoked"] },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "isDeleted": { "type": "boolean" }
+      },
+      "required": ["companyId", "email", "role", "inviteCode", "status", "createdBy", "createdAt", "updatedAt", "isDeleted"]
+    },
+    "Lead": {
+      "title": "Lead",
+      "description": "Real estate prospect lead scoped to a company.",
+      "type": "object",
+      "properties": {
+        "companyId": { "type": "string", "maxLength": 128 },
+        "fullName": { "type": "string", "minLength": 2, "maxLength": 140 },
+        "phone": { "type": "string", "minLength": 10, "maxLength": 20 },
+        "email": { "type": "string", "maxLength": 200 },
+        "source": {
+          "type": "string",
+          "enum": ["99acres", "MagicBricks", "Housing.com", "Facebook/Instagram", "Website", "Walk-in", "Referral", "WhatsApp", "Cold Call"]
+        },
+        "stage": {
+          "type": "string",
+          "enum": ["New", "Contacted", "Interested", "Site Visit Scheduled", "Site Visit Done", "Negotiation", "Booked", "Lost"]
+        },
+        "score": { "type": "number" },
+        "budgetMinInr": { "type": "number" },
+        "budgetMaxInr": { "type": "number" },
+        "preferredLocation": { "type": "string", "maxLength": 160 },
+        "preferredBhk": { "type": "string", "maxLength": 40 },
+        "propertyInterestId": { "type": "string", "maxLength": 128 },
+        "assignedTo": { "type": "string", "maxLength": 128 },
+        "assignedToName": { "type": "string", "maxLength": 120 },
+        "notes": { "type": "string", "maxLength": 2000 },
+        "lastContactedAt": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "isDeleted": { "type": "boolean" }
+      },
+      "required": ["companyId", "fullName", "phone", "source", "stage", "score", "assignedTo", "createdBy", "createdAt", "updatedAt", "isDeleted"]
+    },
+    "Property": {
+      "title": "Property",
+      "description": "Real estate listing or unit inventory item.",
+      "type": "object",
+      "properties": {
+        "companyId": { "type": "string", "maxLength": 128 },
+        "projectId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "minLength": 2, "maxLength": 180 },
+        "propertyType": { "type": "string", "enum": ["residential", "commercial", "plot", "villa", "farmhouse"] },
+        "transactionType": { "type": "string", "enum": ["sale", "rent", "lease"] },
+        "priceInr": { "type": "number" },
+        "areaSqFt": { "type": "number" },
+        "bhk": { "type": "string", "maxLength": 40 },
+        "reraId": { "type": "string", "maxLength": 60 },
+        "city": { "type": "string", "maxLength": 80 },
+        "state": { "type": "string", "maxLength": 80 },
+        "locality": { "type": "string", "maxLength": 140 },
+        "pinCode": { "type": "string", "maxLength": 10 },
+        "floor": { "type": "string", "maxLength": 40 },
+        "facing": { "type": "string", "maxLength": 40 },
+        "status": { "type": "string", "enum": ["available", "hold", "booked", "sold"] },
+        "amenities": { "type": "array" },
+        "imageUrls": { "type": "array" },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "isDeleted": { "type": "boolean" }
+      },
+      "required": ["companyId", "title", "propertyType", "transactionType", "priceInr", "areaSqFt", "status", "createdBy", "createdAt", "updatedAt", "isDeleted"]
+    },
+    "Project": {
+      "title": "Project",
+      "description": "Builder township or multi-tower development project.",
+      "type": "object",
+      "properties": {
+        "companyId": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "developerName": { "type": "string", "maxLength": 160 },
+        "reraId": { "type": "string", "maxLength": 60 },
+        "city": { "type": "string", "maxLength": 80 },
+        "state": { "type": "string", "maxLength": 80 },
+        "locality": { "type": "string", "maxLength": 140 },
+        "possessionDate": { "type": "string", "maxLength": 40 },
+        "totalUnits": { "type": "number" },
+        "towers": { "type": "array" },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "isDeleted": { "type": "boolean" }
+      },
+      "required": ["companyId", "name", "reraId", "city", "state", "totalUnits", "createdBy", "createdAt", "updatedAt", "isDeleted"]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "Verified buyer, seller, tenant, or investor with masked KYC.",
+      "type": "object",
+      "properties": {
+        "companyId": { "type": "string", "maxLength": 128 },
+        "fullName": { "type": "string", "minLength": 2, "maxLength": 140 },
+        "customerType": { "type": "string", "enum": ["buyer", "seller", "tenant", "investor"] },
+        "phone": { "type": "string", "maxLength": 20 },
+        "email": { "type": "string", "maxLength": 200 },
+        "city": { "type": "string", "maxLength": 80 },
+        "state": { "type": "string", "maxLength": 80 },
+        "maskedAadhaar": { "type": "string", "maxLength": 20, "pattern": "^(XXXX-XXXX-\\d{4})?$" },
+        "panNumber": { "type": "string", "maxLength": 15 },
+        "kycStatus": { "type": "string", "enum": ["pending", "verified", "rejected"] },
+        "kycDocUrls": { "type": "array" },
+        "linkedLeadId": { "type": "string", "maxLength": 128 },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "isDeleted": { "type": "boolean" }
+      },
+      "required": ["companyId", "fullName", "customerType", "phone", "kycStatus", "createdBy", "createdAt", "updatedAt", "isDeleted"]
+    },
+    "SiteVisit": {
+      "title": "SiteVisit",
+      "description": "Scheduled property site visit.",
+      "type": "object",
+      "properties": {
+        "companyId": { "type": "string", "maxLength": 128 },
+        "leadId": { "type": "string", "maxLength": 128 },
+        "leadName": { "type": "string", "maxLength": 140 },
+        "propertyId": { "type": "string", "maxLength": 128 },
+        "propertyTitle": { "type": "string", "maxLength": 180 },
+        "agentUid": { "type": "string", "maxLength": 128 },
+        "agentName": { "type": "string", "maxLength": 120 },
+        "scheduledAt": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["scheduled", "completed", "no_show", "rescheduled"] },
+        "feedback": { "type": "string", "maxLength": 1000 },
+        "rating": { "type": "number" },
+        "mapsUrl": { "type": "string", "maxLength": 400 },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "isDeleted": { "type": "boolean" }
+      },
+      "required": ["companyId", "leadId", "propertyId", "agentUid", "scheduledAt", "status", "createdBy", "createdAt", "updatedAt", "isDeleted"]
+    },
+    "Deal": {
+      "title": "Deal",
+      "description": "Property booking, agreement, and registration deal.",
+      "type": "object",
+      "properties": {
+        "companyId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "minLength": 2, "maxLength": 180 },
+        "leadId": { "type": "string", "maxLength": 128 },
+        "customerId": { "type": "string", "maxLength": 128 },
+        "customerName": { "type": "string", "maxLength": 140 },
+        "propertyId": { "type": "string", "maxLength": 128 },
+        "propertyTitle": { "type": "string", "maxLength": 180 },
+        "agentUid": { "type": "string", "maxLength": 128 },
+        "agentName": { "type": "string", "maxLength": 120 },
+        "stage": { "type": "string", "enum": ["Token", "Booking", "Agreement", "Registration", "Closed Won", "Cancelled"] },
+        "dealValueInr": { "type": "number" },
+        "tokenAmountInr": { "type": "number" },
+        "bookingAmountInr": { "type": "number" },
+        "state": { "type": "string", "maxLength": 80 },
+        "stampDutyInr": { "type": "number" },
+        "registrationFeeInr": { "type": "number" },
+        "agreementDate": { "type": "string", "maxLength": 40 },
+        "registrationNumber": { "type": "string", "maxLength": 80 },
+        "paymentMilestones": { "type": "array" },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "isDeleted": { "type": "boolean" }
+      },
+      "required": ["companyId", "title", "propertyId", "agentUid", "stage", "dealValueInr", "createdBy", "createdAt", "updatedAt", "isDeleted"]
+    },
+    "Commission": {
+      "title": "Commission",
+      "description": "Brokerage/agent commission payout and TDS record.",
+      "type": "object",
+      "properties": {
+        "companyId": { "type": "string", "maxLength": 128 },
+        "dealId": { "type": "string", "maxLength": 128 },
+        "dealTitle": { "type": "string", "maxLength": 180 },
+        "agentUid": { "type": "string", "maxLength": 128 },
+        "agentName": { "type": "string", "maxLength": 120 },
+        "ruleType": { "type": "string", "enum": ["percentage", "fixed"] },
+        "ratePercent": { "type": "number" },
+        "grossAmountInr": { "type": "number" },
+        "tdsPercent": { "type": "number" },
+        "tdsAmountInr": { "type": "number" },
+        "netPayableInr": { "type": "number" },
+        "splitPercent": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "approved", "paid"] },
+        "paidAt": { "type": "string", "maxLength": 40 },
+        "payoutReference": { "type": "string", "maxLength": 100 },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "isDeleted": { "type": "boolean" }
+      },
+      "required": ["companyId", "dealId", "agentUid", "ruleType", "grossAmountInr", "netPayableInr", "status", "createdBy", "createdAt", "updatedAt", "isDeleted"]
+    },
+    "TaskItem": {
+      "title": "TaskItem",
+      "description": "Task or follow-up reminder.",
+      "type": "object",
+      "properties": {
+        "companyId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "minLength": 2, "maxLength": 180 },
+        "type": { "type": "string", "enum": ["task", "follow_up", "call", "payment_reminder"] },
+        "priority": { "type": "string", "enum": ["low", "medium", "high"] },
+        "status": { "type": "string", "enum": ["pending", "completed"] },
+        "dueAt": { "type": "string", "format": "date-time" },
+        "assignedTo": { "type": "string", "maxLength": 128 },
+        "assignedToName": { "type": "string", "maxLength": 120 },
+        "linkedEntityType": { "type": "string", "maxLength": 40 },
+        "linkedEntityId": { "type": "string", "maxLength": 128 },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "isDeleted": { "type": "boolean" }
+      },
+      "required": ["companyId", "title", "type", "priority", "status", "dueAt", "assignedTo", "createdBy", "createdAt", "updatedAt", "isDeleted"]
+    },
+    "ActivityLog": {
+      "title": "ActivityLog",
+      "description": "Lead/Deal timeline note or call log.",
+      "type": "object",
+      "properties": {
+        "companyId": { "type": "string", "maxLength": 128 },
+        "entityType": { "type": "string", "enum": ["lead", "deal", "customer", "property"] },
+        "entityId": { "type": "string", "maxLength": 128 },
+        "action": { "type": "string", "maxLength": 100 },
+        "summary": { "type": "string", "maxLength": 1000 },
+        "actorName": { "type": "string", "maxLength": 120 },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "isDeleted": { "type": "boolean" }
+      },
+      "required": ["companyId", "entityType", "entityId", "action", "summary", "createdBy", "createdAt", "updatedAt", "isDeleted"]
+    },
+    "DocumentRecord": {
+      "title": "DocumentRecord",
+      "description": "Agreement templates, receipts, and KYC files metadata.",
+      "type": "object",
+      "properties": {
+        "companyId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "minLength": 2, "maxLength": 180 },
+        "category": { "type": "string", "enum": ["agreement_template", "receipt", "rera_certificate", "kyc", "floor_plan"] },
+        "fileName": { "type": "string", "maxLength": 200 },
+        "fileUrl": { "type": "string", "maxLength": 800 },
+        "mimeType": { "type": "string", "maxLength": 100 },
+        "sizeBytes": { "type": "number" },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "isDeleted": { "type": "boolean" }
+      },
+      "required": ["companyId", "title", "category", "fileName", "createdBy", "createdAt", "updatedAt", "isDeleted"]
+    },
+    "AppNotification": {
+      "title": "AppNotification",
+      "description": "In-app notification for a company user.",
+      "type": "object",
+      "properties": {
+        "companyId": { "type": "string", "maxLength": 128 },
+        "recipientUid": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 140 },
+        "message": { "type": "string", "maxLength": 400 },
+        "read": { "type": "boolean" },
+        "link": { "type": "string", "maxLength": 200 },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "isDeleted": { "type": "boolean" }
+      },
+      "required": ["companyId", "recipientUid", "title", "message", "read", "createdBy", "createdAt", "updatedAt", "isDeleted"]
+    },
+    "CompanySettings": {
+      "title": "CompanySettings",
+      "description": "Customizable pipeline stages, lead sources, and notification preferences.",
+      "type": "object",
+      "properties": {
+        "companyId": { "type": "string", "maxLength": 128 },
+        "pipelineStages": { "type": "array" },
+        "leadSources": { "type": "array" },
+        "whatsappTemplates": { "type": "array" },
+        "autoAssignRoundRobin": { "type": "boolean" },
+        "dailyDigestEnabled": { "type": "boolean" },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "isDeleted": { "type": "boolean" }
+      },
+      "required": ["companyId", "createdBy", "createdAt", "updatedAt", "isDeleted"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable security & compliance audit event.",
+      "type": "object",
+      "properties": {
+        "companyId": { "type": "string", "maxLength": 128 },
+        "actorUid": { "type": "string", "maxLength": 128 },
+        "actorEmail": { "type": "string", "maxLength": 200 },
+        "eventType": { "type": "string", "enum": ["sign_in", "role_change", "soft_delete", "export", "impersonation", "company_approval", "dpdp_request", "invite"] },
+        "targetPath": { "type": "string", "maxLength": 250 },
+        "details": { "type": "string", "maxLength": 500 },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "isDeleted": { "type": "boolean" }
+      },
+      "required": ["actorUid", "eventType", "details", "createdBy", "createdAt", "updatedAt", "isDeleted"]
+    },
+    "SubscriptionPlan": {
+      "title": "SubscriptionPlan",
+      "description": "Platform SaaS subscription tier configuration.",
+      "type": "object",
+      "properties": {
+        "planId": { "type": "string", "enum": ["free", "starter", "pro", "enterprise"] },
+        "name": { "type": "string", "maxLength": 80 },
+        "priceMonthlyInr": { "type": "number" },
+        "priceAnnualInr": { "type": "number" },
+        "userLimit": { "type": "number" },
+        "propertyLimit": { "type": "number" },
+        "features": { "type": "array" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["planId", "name", "priceMonthlyInr", "userLimit", "propertyLimit"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profiles and tenant role assignments."
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/UserPrivateSecurity" },
+      "description": "Isolated TOTP secrets and DPDP deletion requests."
+    },
+    "/companies/{companyId}": {
+      "schema": { "$ref": "#/entities/Company" },
+      "description": "Multi-tenant real estate companies."
+    },
+    "/companies/{companyId}/invitations/{inviteId}": {
+      "schema": { "$ref": "#/entities/Invitation" },
+      "description": "Invite-only employee onboarding records."
+    },
+    "/companies/{companyId}/leads/{leadId}": {
+      "schema": { "$ref": "#/entities/Lead" },
+      "description": "Company leads pipeline."
+    },
+    "/companies/{companyId}/properties/{propertyId}": {
+      "schema": { "$ref": "#/entities/Property" },
+      "description": "Company property inventory."
+    },
+    "/companies/{companyId}/projects/{projectId}": {
+      "schema": { "$ref": "#/entities/Project" },
+      "description": "Builder projects and towers."
+    },
+    "/companies/{companyId}/customers/{customerId}": {
+      "schema": { "$ref": "#/entities/Customer" },
+      "description": "Company customers and masked KYC."
+    },
+    "/companies/{companyId}/siteVisits/{visitId}": {
+      "schema": { "$ref": "#/entities/SiteVisit" },
+      "description": "Scheduled property site visits."
+    },
+    "/companies/{companyId}/deals/{dealId}": {
+      "schema": { "$ref": "#/entities/Deal" },
+      "description": "Deals, bookings, agreements, and stamp duty."
+    },
+    "/companies/{companyId}/commissions/{commissionId}": {
+      "schema": { "$ref": "#/entities/Commission" },
+      "description": "Agent commissions, splits, and TDS payouts."
+    },
+    "/companies/{companyId}/tasks/{taskId}": {
+      "schema": { "$ref": "#/entities/TaskItem" },
+      "description": "Tasks and follow-up reminders."
+    },
+    "/companies/{companyId}/followUps/{followUpId}": {
+      "schema": { "$ref": "#/entities/TaskItem" },
+      "description": "Follow-up reminders subcollection."
+    },
+    "/companies/{companyId}/activities/{activityId}": {
+      "schema": { "$ref": "#/entities/ActivityLog" },
+      "description": "Lead and deal activity timeline logs."
+    },
+    "/companies/{companyId}/documents/{documentId}": {
+      "schema": { "$ref": "#/entities/DocumentRecord" },
+      "description": "Agreement templates and receipts metadata."
+    },
+    "/companies/{companyId}/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/AppNotification" },
+      "description": "In-app notifications per user."
+    },
+    "/companies/{companyId}/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/CompanySettings" },
+      "description": "Company pipeline and source configuration."
+    },
+    "/companies/{companyId}/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Company-scoped audit events."
+    },
+    "/platform/subscriptionPlans/items/{planId}": {
+      "schema": { "$ref": "#/entities/SubscriptionPlan" },
+      "description": "Platform subscription tiers (publicly readable for pricing, Super Admin writable)."
+    },
+    "/platform/auditLogs/items/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Platform-wide audit logs (Super Admin only)."
+    }
+  }
+}

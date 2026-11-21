@@ -1,0 +1,6 @@
+{
+  "name": "NivaasOS — Indian Real Estate CRM",
+  "description": "Multi-tenant Real Estate CRM SaaS for Indian builders, brokers, and channel partners with RERA compliance, GST billing, site visits, deals, and commission workflows.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

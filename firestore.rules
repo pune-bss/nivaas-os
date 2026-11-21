@@ -1,0 +1,1004 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Safety Net (Deny by Default)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Global Primitives & Identity Helpers
+    // -------------------------------------------------------------------------
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && (
+        request.auth.token.email_verified == true ||
+        request.auth.token.firebase.sign_in_provider == 'phone'
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 2 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isStr(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isOptStr(data, key, maxLen) {
+      return !(key in data) || (data[key] is string && data[key].size() <= maxLen);
+    }
+
+    function isNonNegNum(val) {
+      return (val is int || val is float) && val >= 0;
+    }
+
+    function userExists() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isBootstrappedAdmin() {
+      return isSignedIn()
+        && request.auth.token.email == 'shinde.amruta1@gmail.com'
+        && request.auth.token.email_verified == true;
+    }
+
+    function isSuperAdmin() {
+      return isVerifiedUser() && (
+        isBootstrappedAdmin() ||
+        request.auth.token.role == 'super_admin' ||
+        (userExists() && userDoc().role == 'super_admin' && userDoc().status == 'active' && userDoc().isDeleted == false)
+      );
+    }
+
+    function companyExists(companyId) {
+      return exists(/databases/$(database)/documents/companies/$(companyId));
+    }
+
+    function companyIsActive(companyId) {
+      return companyExists(companyId)
+        && get(/databases/$(database)/documents/companies/$(companyId)).data.status == 'active'
+        && get(/databases/$(database)/documents/companies/$(companyId)).data.isDeleted == false;
+    }
+
+    function userRoleIn(companyId) {
+      return (request.auth.token.companyId == companyId && request.auth.token.role is string)
+        ? request.auth.token.role
+        : (userExists() && userDoc().companyId == companyId && userDoc().status == 'active' && userDoc().isDeleted == false)
+          ? userDoc().role
+          : 'none';
+    }
+
+    function isActiveMember(companyId) {
+      return isVerifiedUser() && (
+        isSuperAdmin() ||
+        (companyIsActive(companyId) && userRoleIn(companyId) in ['company_admin', 'sales_manager', 'sales_executive', 'accountant', 'receptionist'])
+      );
+    }
+
+    function isCompanyAdmin(companyId) {
+      return isVerifiedUser() && (
+        isSuperAdmin() ||
+        (companyIsActive(companyId) && userRoleIn(companyId) == 'company_admin')
+      );
+    }
+
+    function isManagerOrAdmin(companyId) {
+      return isVerifiedUser() && (
+        isSuperAdmin() ||
+        (companyIsActive(companyId) && userRoleIn(companyId) in ['company_admin', 'sales_manager'])
+      );
+    }
+
+    function isSalesTeam(companyId) {
+      return isVerifiedUser() && (
+        isSuperAdmin() ||
+        (companyIsActive(companyId) && userRoleIn(companyId) in ['company_admin', 'sales_manager', 'sales_executive', 'receptionist'])
+      );
+    }
+
+    function isFinanceOrAdmin(companyId) {
+      return isVerifiedUser() && (
+        isSuperAdmin() ||
+        (companyIsActive(companyId) && userRoleIn(companyId) in ['company_admin', 'accountant'])
+      );
+    }
+
+    function hasValidAuditTimestampsOnCreate(data) {
+      return data.createdAt is timestamp
+        && data.createdAt == request.time
+        && data.updatedAt is timestamp
+        && data.updatedAt == request.time
+        && data.isDeleted is bool
+        && data.isDeleted == false;
+    }
+
+    function hasImmutableBaseOnUpdate(companyId) {
+      return incoming().companyId == companyId
+        && incoming().companyId == existing().companyId
+        && incoming().createdBy == existing().createdBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt is timestamp
+        && incoming().updatedAt == request.time;
+    }
+
+    // -------------------------------------------------------------------------
+    // Entity Validation Blueprints
+    // -------------------------------------------------------------------------
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'role', 'status', 'createdAt', 'updatedAt', 'isDeleted'])
+        && data.keys().hasOnly([
+          'uid', 'email', 'displayName', 'phone', 'role', 'companyId', 'status',
+          'totpEnabled', 'preferredLanguage', 'dpdpConsentAt', 'monthlyTargetInr',
+          'inviteCode', 'lastLoginAt', 'createdAt', 'updatedAt', 'isDeleted'
+        ])
+        && isValidId(data.uid)
+        && isStr(data.displayName, 1, 120)
+        && data.role in ['super_admin', 'company_admin', 'sales_manager', 'sales_executive', 'accountant', 'receptionist', 'pending_owner']
+        && data.status in ['active', 'invited', 'suspended', 'pending_approval']
+        && isOptStr(data, 'email', 200)
+        && isOptStr(data, 'phone', 20)
+        && (!('companyId' in data) || data.companyId == null || isValidId(data.companyId))
+        && (!('totpEnabled' in data) || data.totpEnabled is bool)
+        && (!('preferredLanguage' in data) || data.preferredLanguage in ['en', 'hi', 'mr'])
+        && (!('monthlyTargetInr' in data) || isNonNegNum(data.monthlyTargetInr))
+        && isOptStr(data, 'inviteCode', 64)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.isDeleted is bool;
+    }
+
+    function isValidPrivateSecurity(data) {
+      return data.keys().hasAll(['sessionEpoch', 'updatedAt'])
+        && data.keys().hasOnly(['totpSecret', 'sessionEpoch', 'dpdpDeletionRequestedAt', 'updatedAt'])
+        && isNonNegNum(data.sessionEpoch)
+        && isOptStr(data, 'totpSecret', 128)
+        && data.updatedAt is timestamp
+        && data.updatedAt == request.time;
+    }
+
+    function isValidCompany(data, companyId) {
+      return data.keys().hasAll(['companyId', 'name', 'businessType', 'ownerUid', 'status', 'planId', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'])
+        && data.keys().hasOnly([
+          'companyId', 'name', 'businessType', 'ownerUid', 'ownerEmail', 'phone',
+          'city', 'state', 'pinCode', 'gstNumber', 'reraNumber', 'status',
+          'planId', 'userLimit', 'propertyLimit', 'trialEndsAt', 'logoUrl',
+          'createdBy', 'createdAt', 'updatedAt', 'isDeleted'
+        ])
+        && data.companyId == companyId
+        && isValidId(data.companyId)
+        && isStr(data.name, 2, 160)
+        && data.businessType in ['agency', 'broker', 'builder', 'consultant']
+        && isValidId(data.ownerUid)
+        && data.status in ['pending_approval', 'active', 'suspended']
+        && data.planId in ['free', 'starter', 'pro', 'enterprise']
+        && isOptStr(data, 'ownerEmail', 200)
+        && isOptStr(data, 'phone', 20)
+        && isOptStr(data, 'city', 80)
+        && isOptStr(data, 'state', 80)
+        && isOptStr(data, 'pinCode', 10)
+        && isOptStr(data, 'gstNumber', 20)
+        && isOptStr(data, 'reraNumber', 60)
+        && isOptStr(data, 'logoUrl', 500)
+        && (!('userLimit' in data) || isNonNegNum(data.userLimit))
+        && (!('propertyLimit' in data) || isNonNegNum(data.propertyLimit))
+        && isValidId(data.createdBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.isDeleted is bool;
+    }
+
+    function isValidInvitation(data, companyId) {
+      return data.keys().hasAll(['companyId', 'email', 'role', 'inviteCode', 'status', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'])
+        && data.keys().hasOnly(['companyId', 'email', 'displayName', 'role', 'inviteCode', 'status', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'])
+        && data.companyId == companyId
+        && isStr(data.email, 3, 200)
+        && isOptStr(data, 'displayName', 120)
+        && data.role in ['company_admin', 'sales_manager', 'sales_executive', 'accountant', 'receptionist']
+        && isStr(data.inviteCode, 8, 64)
+        && data.status in ['pending', 'accepted', 'revoked']
+        && isValidId(data.createdBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.isDeleted is bool;
+    }
+
+    function isValidLead(data, companyId) {
+      return data.keys().hasAll(['companyId', 'fullName', 'phone', 'source', 'stage', 'score', 'assignedTo', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'])
+        && data.keys().hasOnly([
+          'companyId', 'fullName', 'phone', 'email', 'source', 'stage', 'score',
+          'budgetMinInr', 'budgetMaxInr', 'preferredLocation', 'preferredBhk',
+          'propertyInterestId', 'assignedTo', 'assignedToName', 'notes',
+          'lastContactedAt', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'
+        ])
+        && data.companyId == companyId
+        && isStr(data.fullName, 2, 140)
+        && isStr(data.phone, 10, 20)
+        && isOptStr(data, 'email', 200)
+        && data.source in ['99acres', 'MagicBricks', 'Housing.com', 'Facebook/Instagram', 'Website', 'Walk-in', 'Referral', 'WhatsApp', 'Cold Call']
+        && data.stage in ['New', 'Contacted', 'Interested', 'Site Visit Scheduled', 'Site Visit Done', 'Negotiation', 'Booked', 'Lost']
+        && (data.score is int || data.score is float) && data.score >= 0 && data.score <= 100
+        && (!('budgetMinInr' in data) || isNonNegNum(data.budgetMinInr))
+        && (!('budgetMaxInr' in data) || isNonNegNum(data.budgetMaxInr))
+        && isOptStr(data, 'preferredLocation', 160)
+        && isOptStr(data, 'preferredBhk', 40)
+        && isOptStr(data, 'propertyInterestId', 128)
+        && isValidId(data.assignedTo)
+        && isOptStr(data, 'assignedToName', 120)
+        && isOptStr(data, 'notes', 2000)
+        && isValidId(data.createdBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.isDeleted is bool;
+    }
+
+    function isValidProperty(data, companyId) {
+      return data.keys().hasAll(['companyId', 'title', 'propertyType', 'transactionType', 'priceInr', 'areaSqFt', 'status', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'])
+        && data.keys().hasOnly([
+          'companyId', 'projectId', 'title', 'propertyType', 'transactionType',
+          'priceInr', 'areaSqFt', 'bhk', 'reraId', 'city', 'state', 'locality',
+          'pinCode', 'floor', 'facing', 'status', 'amenities', 'imageUrls',
+          'createdBy', 'createdAt', 'updatedAt', 'isDeleted'
+        ])
+        && data.companyId == companyId
+        && isOptStr(data, 'projectId', 128)
+        && isStr(data.title, 2, 180)
+        && data.propertyType in ['residential', 'commercial', 'plot', 'villa', 'farmhouse']
+        && data.transactionType in ['sale', 'rent', 'lease']
+        && isNonNegNum(data.priceInr)
+        && isNonNegNum(data.areaSqFt)
+        && isOptStr(data, 'bhk', 40)
+        && isOptStr(data, 'reraId', 60)
+        && isOptStr(data, 'city', 80)
+        && isOptStr(data, 'state', 80)
+        && isOptStr(data, 'locality', 140)
+        && isOptStr(data, 'pinCode', 10)
+        && isOptStr(data, 'floor', 40)
+        && isOptStr(data, 'facing', 40)
+        && data.status in ['available', 'hold', 'booked', 'sold']
+        && (!('amenities' in data) || (data.amenities is list && data.amenities.size() <= 30))
+        && (!('imageUrls' in data) || (data.imageUrls is list && data.imageUrls.size() <= 12))
+        && isValidId(data.createdBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.isDeleted is bool;
+    }
+
+    function isValidProject(data, companyId) {
+      return data.keys().hasAll(['companyId', 'name', 'reraId', 'city', 'state', 'totalUnits', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'])
+        && data.keys().hasOnly([
+          'companyId', 'name', 'developerName', 'reraId', 'city', 'state', 'locality',
+          'possessionDate', 'totalUnits', 'towers', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'
+        ])
+        && data.companyId == companyId
+        && isStr(data.name, 2, 160)
+        && isOptStr(data, 'developerName', 160)
+        && isStr(data.reraId, 2, 60)
+        && isStr(data.city, 2, 80)
+        && isStr(data.state, 2, 80)
+        && isOptStr(data, 'locality', 140)
+        && isOptStr(data, 'possessionDate', 40)
+        && isNonNegNum(data.totalUnits)
+        && (!('towers' in data) || (data.towers is list && data.towers.size() <= 20))
+        && isValidId(data.createdBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.isDeleted is bool;
+    }
+
+    function isValidCustomer(data, companyId) {
+      return data.keys().hasAll(['companyId', 'fullName', 'customerType', 'phone', 'kycStatus', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'])
+        && data.keys().hasOnly([
+          'companyId', 'fullName', 'customerType', 'phone', 'email', 'city', 'state',
+          'maskedAadhaar', 'panNumber', 'kycStatus', 'kycDocUrls', 'linkedLeadId',
+          'createdBy', 'createdAt', 'updatedAt', 'isDeleted'
+        ])
+        && data.companyId == companyId
+        && isStr(data.fullName, 2, 140)
+        && data.customerType in ['buyer', 'seller', 'tenant', 'investor']
+        && isStr(data.phone, 10, 20)
+        && isOptStr(data, 'email', 200)
+        && isOptStr(data, 'city', 80)
+        && isOptStr(data, 'state', 80)
+        && (!('maskedAadhaar' in data) || data.maskedAadhaar == '' || (data.maskedAadhaar is string && data.maskedAadhaar.matches('^XXXX-XXXX-[0-9]{4}$')))
+        && isOptStr(data, 'panNumber', 15)
+        && data.kycStatus in ['pending', 'verified', 'rejected']
+        && (!('kycDocUrls' in data) || (data.kycDocUrls is list && data.kycDocUrls.size() <= 10))
+        && isOptStr(data, 'linkedLeadId', 128)
+        && isValidId(data.createdBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.isDeleted is bool;
+    }
+
+    function isValidSiteVisit(data, companyId) {
+      return data.keys().hasAll(['companyId', 'leadId', 'propertyId', 'agentUid', 'scheduledAt', 'status', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'])
+        && data.keys().hasOnly([
+          'companyId', 'leadId', 'leadName', 'propertyId', 'propertyTitle',
+          'agentUid', 'agentName', 'scheduledAt', 'status', 'feedback', 'rating',
+          'mapsUrl', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'
+        ])
+        && data.companyId == companyId
+        && isValidId(data.leadId)
+        && isOptStr(data, 'leadName', 140)
+        && isValidId(data.propertyId)
+        && isOptStr(data, 'propertyTitle', 180)
+        && isValidId(data.agentUid)
+        && isOptStr(data, 'agentName', 120)
+        && isStr(data.scheduledAt, 4, 50)
+        && data.status in ['scheduled', 'completed', 'no_show', 'rescheduled']
+        && isOptStr(data, 'feedback', 1000)
+        && (!('rating' in data) || (isNonNegNum(data.rating) && data.rating <= 5))
+        && isOptStr(data, 'mapsUrl', 400)
+        && isValidId(data.createdBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.isDeleted is bool;
+    }
+
+    function isValidDeal(data, companyId) {
+      return data.keys().hasAll(['companyId', 'title', 'propertyId', 'agentUid', 'stage', 'dealValueInr', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'])
+        && data.keys().hasOnly([
+          'companyId', 'title', 'leadId', 'customerId', 'customerName', 'propertyId',
+          'propertyTitle', 'agentUid', 'agentName', 'stage', 'dealValueInr',
+          'tokenAmountInr', 'bookingAmountInr', 'state', 'stampDutyInr',
+          'registrationFeeInr', 'agreementDate', 'registrationNumber',
+          'paymentMilestones', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'
+        ])
+        && data.companyId == companyId
+        && isStr(data.title, 2, 180)
+        && isOptStr(data, 'leadId', 128)
+        && isOptStr(data, 'customerId', 128)
+        && isOptStr(data, 'customerName', 140)
+        && isValidId(data.propertyId)
+        && isOptStr(data, 'propertyTitle', 180)
+        && isValidId(data.agentUid)
+        && isOptStr(data, 'agentName', 120)
+        && data.stage in ['Token', 'Booking', 'Agreement', 'Registration', 'Closed Won', 'Cancelled']
+        && isNonNegNum(data.dealValueInr)
+        && (!('tokenAmountInr' in data) || isNonNegNum(data.tokenAmountInr))
+        && (!('bookingAmountInr' in data) || isNonNegNum(data.bookingAmountInr))
+        && isOptStr(data, 'state', 80)
+        && (!('stampDutyInr' in data) || isNonNegNum(data.stampDutyInr))
+        && (!('registrationFeeInr' in data) || isNonNegNum(data.registrationFeeInr))
+        && isOptStr(data, 'agreementDate', 40)
+        && isOptStr(data, 'registrationNumber', 80)
+        && (!('paymentMilestones' in data) || (data.paymentMilestones is list && data.paymentMilestones.size() <= 20))
+        && isValidId(data.createdBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.isDeleted is bool;
+    }
+
+    function isValidCommission(data, companyId) {
+      return data.keys().hasAll(['companyId', 'dealId', 'agentUid', 'ruleType', 'grossAmountInr', 'netPayableInr', 'status', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'])
+        && data.keys().hasOnly([
+          'companyId', 'dealId', 'dealTitle', 'agentUid', 'agentName', 'ruleType',
+          'ratePercent', 'grossAmountInr', 'tdsPercent', 'tdsAmountInr',
+          'netPayableInr', 'splitPercent', 'status', 'paidAt', 'payoutReference',
+          'createdBy', 'createdAt', 'updatedAt', 'isDeleted'
+        ])
+        && data.companyId == companyId
+        && isValidId(data.dealId)
+        && isOptStr(data, 'dealTitle', 180)
+        && isValidId(data.agentUid)
+        && isOptStr(data, 'agentName', 120)
+        && data.ruleType in ['percentage', 'fixed']
+        && (!('ratePercent' in data) || isNonNegNum(data.ratePercent))
+        && isNonNegNum(data.grossAmountInr)
+        && (!('tdsPercent' in data) || isNonNegNum(data.tdsPercent))
+        && (!('tdsAmountInr' in data) || isNonNegNum(data.tdsAmountInr))
+        && isNonNegNum(data.netPayableInr)
+        && (!('splitPercent' in data) || isNonNegNum(data.splitPercent))
+        && data.status in ['pending', 'approved', 'paid']
+        && isOptStr(data, 'paidAt', 40)
+        && isOptStr(data, 'payoutReference', 100)
+        && isValidId(data.createdBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.isDeleted is bool;
+    }
+
+    function isValidTask(data, companyId) {
+      return data.keys().hasAll(['companyId', 'title', 'type', 'priority', 'status', 'dueAt', 'assignedTo', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'])
+        && data.keys().hasOnly([
+          'companyId', 'title', 'type', 'priority', 'status', 'dueAt',
+          'assignedTo', 'assignedToName', 'linkedEntityType', 'linkedEntityId',
+          'createdBy', 'createdAt', 'updatedAt', 'isDeleted'
+        ])
+        && data.companyId == companyId
+        && isStr(data.title, 2, 180)
+        && data.type in ['task', 'follow_up', 'call', 'payment_reminder']
+        && data.priority in ['low', 'medium', 'high']
+        && data.status in ['pending', 'completed']
+        && isStr(data.dueAt, 4, 50)
+        && isValidId(data.assignedTo)
+        && isOptStr(data, 'assignedToName', 120)
+        && isOptStr(data, 'linkedEntityType', 40)
+        && isOptStr(data, 'linkedEntityId', 128)
+        && isValidId(data.createdBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.isDeleted is bool;
+    }
+
+    function isValidActivity(data, companyId) {
+      return data.keys().hasAll(['companyId', 'entityType', 'entityId', 'action', 'summary', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'])
+        && data.keys().hasOnly(['companyId', 'entityType', 'entityId', 'action', 'summary', 'actorName', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'])
+        && data.companyId == companyId
+        && data.entityType in ['lead', 'deal', 'customer', 'property']
+        && isValidId(data.entityId)
+        && isStr(data.action, 2, 100)
+        && isStr(data.summary, 1, 1000)
+        && isOptStr(data, 'actorName', 120)
+        && isValidId(data.createdBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.isDeleted is bool;
+    }
+
+    function isValidDocumentRecord(data, companyId) {
+      return data.keys().hasAll(['companyId', 'title', 'category', 'fileName', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'])
+        && data.keys().hasOnly(['companyId', 'title', 'category', 'fileName', 'fileUrl', 'mimeType', 'sizeBytes', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'])
+        && data.companyId == companyId
+        && isStr(data.title, 2, 180)
+        && data.category in ['agreement_template', 'receipt', 'rera_certificate', 'kyc', 'floor_plan']
+        && isStr(data.fileName, 1, 200)
+        && isOptStr(data, 'fileUrl', 800)
+        && isOptStr(data, 'mimeType', 100)
+        && (!('sizeBytes' in data) || isNonNegNum(data.sizeBytes))
+        && isValidId(data.createdBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.isDeleted is bool;
+    }
+
+    function isValidNotification(data, companyId) {
+      return data.keys().hasAll(['companyId', 'recipientUid', 'title', 'message', 'read', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'])
+        && data.keys().hasOnly(['companyId', 'recipientUid', 'title', 'message', 'read', 'link', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'])
+        && data.companyId == companyId
+        && isValidId(data.recipientUid)
+        && isStr(data.title, 1, 140)
+        && isStr(data.message, 1, 400)
+        && data.read is bool
+        && isOptStr(data, 'link', 200)
+        && isValidId(data.createdBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.isDeleted is bool;
+    }
+
+    function isValidCompanySettings(data, companyId) {
+      return data.keys().hasAll(['companyId', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'])
+        && data.keys().hasOnly([
+          'companyId', 'pipelineStages', 'leadSources', 'whatsappTemplates',
+          'autoAssignRoundRobin', 'dailyDigestEnabled', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'
+        ])
+        && data.companyId == companyId
+        && (!('pipelineStages' in data) || (data.pipelineStages is list && data.pipelineStages.size() <= 15))
+        && (!('leadSources' in data) || (data.leadSources is list && data.leadSources.size() <= 20))
+        && (!('whatsappTemplates' in data) || (data.whatsappTemplates is list && data.whatsappTemplates.size() <= 20))
+        && (!('autoAssignRoundRobin' in data) || data.autoAssignRoundRobin is bool)
+        && (!('dailyDigestEnabled' in data) || data.dailyDigestEnabled is bool)
+        && isValidId(data.createdBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.isDeleted is bool;
+    }
+
+    function isValidAuditLog(data) {
+      return data.keys().hasAll(['actorUid', 'eventType', 'details', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'])
+        && data.keys().hasOnly(['companyId', 'actorUid', 'actorEmail', 'eventType', 'targetPath', 'details', 'createdBy', 'createdAt', 'updatedAt', 'isDeleted'])
+        && isOptStr(data, 'companyId', 128)
+        && isValidId(data.actorUid)
+        && isOptStr(data, 'actorEmail', 200)
+        && data.eventType in ['sign_in', 'role_change', 'soft_delete', 'export', 'impersonation', 'company_approval', 'dpdp_request', 'invite']
+        && isOptStr(data, 'targetPath', 250)
+        && isStr(data.details, 1, 500)
+        && isValidId(data.createdBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.isDeleted is bool;
+    }
+
+    function isValidSubscriptionPlan(data) {
+      return data.keys().hasAll(['planId', 'name', 'priceMonthlyInr', 'userLimit', 'propertyLimit'])
+        && data.keys().hasOnly(['planId', 'name', 'priceMonthlyInr', 'priceAnnualInr', 'userLimit', 'propertyLimit', 'features', 'updatedAt'])
+        && data.planId in ['free', 'starter', 'pro', 'enterprise']
+        && isStr(data.name, 2, 80)
+        && isNonNegNum(data.priceMonthlyInr)
+        && (!('priceAnnualInr' in data) || isNonNegNum(data.priceAnnualInr))
+        && isNonNegNum(data.userLimit)
+        && isNonNegNum(data.propertyLimit)
+        && (!('features' in data) || (data.features is list && data.features.size() <= 20))
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    // -------------------------------------------------------------------------
+    // Users & Isolated Private Security Secrets
+    // -------------------------------------------------------------------------
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isVerifiedUser() && (
+        request.auth.uid == userId ||
+        isSuperAdmin() ||
+        (userExists() && existing().companyId != null && userDoc().companyId == existing().companyId && userRoleIn(existing().companyId) in ['company_admin', 'sales_manager'])
+      );
+
+      allow list: if isVerifiedUser() && (
+        isSuperAdmin() ||
+        (userExists() && resource.data.companyId != null && resource.data.companyId == userDoc().companyId)
+      );
+
+      allow create: if isValidId(userId)
+        && isVerifiedUser()
+        && isValidUserProfile(incoming())
+        && hasValidAuditTimestampsOnCreate(incoming())
+        && incoming().uid == userId
+        && (
+          isSuperAdmin() ||
+          (
+            request.auth.uid == userId &&
+            (
+              // Case 1: Bootstrapped Super Admin creating own profile
+              (isBootstrappedAdmin() && incoming().role == 'super_admin' && incoming().status == 'active') ||
+              // Case 2: New company owner registering pending approval (must own the company doc)
+              (
+                incoming().role == 'company_admin' &&
+                incoming().status == 'pending_approval' &&
+                incoming().companyId is string &&
+                exists(/databases/$(database)/documents/companies/$(incoming().companyId)) &&
+                get(/databases/$(database)/documents/companies/$(incoming().companyId)).data.ownerUid == request.auth.uid
+              ) ||
+              // Case 3: Accepting an existing valid company invitation
+              (
+                incoming().role != 'super_admin' &&
+                incoming().status == 'active' &&
+                incoming().companyId is string &&
+                incoming().inviteCode is string &&
+                exists(/databases/$(database)/documents/companies/$(incoming().companyId)/invitations/$(incoming().inviteCode)) &&
+                get(/databases/$(database)/documents/companies/$(incoming().companyId)/invitations/$(incoming().inviteCode)).data.status == 'pending' &&
+                get(/databases/$(database)/documents/companies/$(incoming().companyId)/invitations/$(incoming().inviteCode)).data.email == request.auth.token.email &&
+                get(/databases/$(database)/documents/companies/$(incoming().companyId)/invitations/$(incoming().inviteCode)).data.role == incoming().role
+              )
+            )
+          )
+        );
+
+      allow update: if isValidId(userId)
+        && isVerifiedUser()
+        && isValidUserProfile(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isSuperAdmin() ||
+          // Company Admin can manage team roles/targets/status within their company (never escalate to super_admin or move companyId)
+          (
+            existing().companyId != null &&
+            isCompanyAdmin(existing().companyId) &&
+            incoming().companyId == existing().companyId &&
+            incoming().role != 'super_admin' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['role', 'status', 'monthlyTargetInr', 'displayName', 'phone', 'updatedAt', 'isDeleted'])
+          ) ||
+          // User without company accepting a pending invitation
+          (
+            request.auth.uid == userId &&
+            existing().companyId == null &&
+            incoming().role != 'super_admin' &&
+            incoming().status == 'active' &&
+            incoming().companyId is string &&
+            incoming().inviteCode is string &&
+            exists(/databases/$(database)/documents/companies/$(incoming().companyId)/invitations/$(incoming().inviteCode)) &&
+            get(/databases/$(database)/documents/companies/$(incoming().companyId)/invitations/$(incoming().inviteCode)).data.status == 'pending' &&
+            get(/databases/$(database)/documents/companies/$(incoming().companyId)/invitations/$(incoming().inviteCode)).data.email == request.auth.token.email &&
+            get(/databases/$(database)/documents/companies/$(incoming().companyId)/invitations/$(incoming().inviteCode)).data.role == incoming().role &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['companyId', 'role', 'status', 'inviteCode', 'updatedAt'])
+          ) ||
+          // User updating own safe preferences
+          (
+            request.auth.uid == userId &&
+            incoming().role == existing().role &&
+            incoming().companyId == existing().companyId &&
+            incoming().status == existing().status &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'phone', 'preferredLanguage', 'totpEnabled', 'dpdpConsentAt', 'lastLoginAt', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isValidId(userId) && isSuperAdmin();
+
+      match /private/{docId} {
+        allow get: if isValidId(userId) && isValidId(docId) && isVerifiedUser() && request.auth.uid == userId;
+        allow create, update: if isValidId(userId) && isValidId(docId) && isVerifiedUser() && request.auth.uid == userId && isValidPrivateSecurity(incoming());
+        allow delete: if isValidId(userId) && isValidId(docId) && isVerifiedUser() && request.auth.uid == userId;
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // Platform Global Collections (Super Admin + Pricing Read)
+    // -------------------------------------------------------------------------
+    match /platform/subscriptionPlans/items/{planId} {
+      allow get: if isValidId(planId) && isSignedIn();
+      allow list: if isSignedIn() && resource.data.planId in ['free', 'starter', 'pro', 'enterprise'];
+      allow create, update: if isValidId(planId) && isSuperAdmin() && isValidSubscriptionPlan(incoming());
+      allow delete: if isValidId(planId) && isSuperAdmin();
+    }
+
+    match /platform/auditLogs/items/{logId} {
+      allow get: if isValidId(logId) && isSuperAdmin();
+      allow list: if isSuperAdmin() && resource.data.isDeleted == false;
+      allow create: if isValidId(logId)
+        && isVerifiedUser()
+        && isValidAuditLog(incoming())
+        && hasValidAuditTimestampsOnCreate(incoming())
+        && incoming().actorUid == request.auth.uid
+        && incoming().createdBy == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Multi-Tenant Companies & Operational Subcollections
+    // -------------------------------------------------------------------------
+    match /companies/{companyId} {
+      allow get: if isValidId(companyId) && isVerifiedUser() && (
+        isSuperAdmin() ||
+        existing().ownerUid == request.auth.uid ||
+        (userExists() && userDoc().companyId == companyId && userDoc().isDeleted == false)
+      );
+
+      allow list: if isVerifiedUser() && (
+        isSuperAdmin() ||
+        resource.data.ownerUid == request.auth.uid
+      );
+
+      allow create: if isValidId(companyId)
+        && isVerifiedUser()
+        && isValidCompany(incoming(), companyId)
+        && hasValidAuditTimestampsOnCreate(incoming())
+        && incoming().createdBy == request.auth.uid
+        && (
+          isSuperAdmin() ||
+          (
+            incoming().ownerUid == request.auth.uid &&
+            incoming().status == 'pending_approval' &&
+            incoming().planId == 'free' &&
+            incoming().userLimit == 5 &&
+            incoming().propertyLimit == 25
+          )
+        );
+
+      allow update: if isValidId(companyId)
+        && isVerifiedUser()
+        && isValidCompany(incoming(), companyId)
+        && incoming().companyId == existing().companyId
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdBy == existing().createdBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isSuperAdmin() ||
+          (
+            isCompanyAdmin(companyId) &&
+            incoming().status == existing().status &&
+            incoming().planId == existing().planId &&
+            incoming().userLimit == existing().userLimit &&
+            incoming().propertyLimit == existing().propertyLimit &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'businessType', 'phone', 'city', 'state', 'pinCode', 'gstNumber', 'reraNumber', 'logoUrl', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isValidId(companyId) && isSuperAdmin();
+
+      // Invitations
+      match /invitations/{inviteId} {
+        allow get: if isValidId(companyId) && isValidId(inviteId) && isVerifiedUser() && (
+          isCompanyAdmin(companyId) ||
+          existing().email == request.auth.token.email
+        );
+        allow list: if isVerifiedUser() && resource.data.companyId == companyId && (
+          isCompanyAdmin(companyId) ||
+          resource.data.email == request.auth.token.email
+        );
+        allow create: if isValidId(companyId) && isValidId(inviteId)
+          && isCompanyAdmin(companyId)
+          && isValidInvitation(incoming(), companyId)
+          && hasValidAuditTimestampsOnCreate(incoming())
+          && incoming().createdBy == request.auth.uid;
+        allow update: if isValidId(companyId) && isValidId(inviteId)
+          && isVerifiedUser()
+          && isValidInvitation(incoming(), companyId)
+          && hasImmutableBaseOnUpdate(companyId)
+          && (
+            isCompanyAdmin(companyId) ||
+            (
+              existing().email == request.auth.token.email &&
+              existing().status == 'pending' &&
+              incoming().status == 'accepted' &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+            )
+          );
+        allow delete: if isValidId(companyId) && isValidId(inviteId) && isCompanyAdmin(companyId);
+      }
+
+      // Leads
+      match /leads/{leadId} {
+        allow get: if isValidId(companyId) && isValidId(leadId) && isSalesTeam(companyId) && (
+          userRoleIn(companyId) != 'sales_executive' || existing().assignedTo == request.auth.uid || isSuperAdmin()
+        );
+        allow list: if isSalesTeam(companyId) && resource.data.companyId == companyId && (
+          userRoleIn(companyId) != 'sales_executive' || resource.data.assignedTo == request.auth.uid || isSuperAdmin()
+        );
+        allow create: if isValidId(companyId) && isValidId(leadId)
+          && isSalesTeam(companyId)
+          && isValidLead(incoming(), companyId)
+          && hasValidAuditTimestampsOnCreate(incoming())
+          && incoming().createdBy == request.auth.uid;
+        allow update: if isValidId(companyId) && isValidId(leadId)
+          && isSalesTeam(companyId)
+          && isValidLead(incoming(), companyId)
+          && hasImmutableBaseOnUpdate(companyId)
+          && (
+            isManagerOrAdmin(companyId) ||
+            (
+              userRoleIn(companyId) == 'sales_executive' &&
+              existing().assignedTo == request.auth.uid &&
+              incoming().assignedTo == existing().assignedTo &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['stage', 'score', 'notes', 'lastContactedAt', 'preferredLocation', 'preferredBhk', 'budgetMinInr', 'budgetMaxInr', 'updatedAt'])
+            ) ||
+            (
+              userRoleIn(companyId) == 'receptionist' &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['phone', 'email', 'notes', 'updatedAt'])
+            )
+          );
+        allow delete: if isValidId(companyId) && isValidId(leadId) && isManagerOrAdmin(companyId);
+      }
+
+      // Properties
+      match /properties/{propertyId} {
+        allow get: if isValidId(companyId) && isValidId(propertyId) && isActiveMember(companyId);
+        allow list: if isActiveMember(companyId) && resource.data.companyId == companyId;
+        allow create: if isValidId(companyId) && isValidId(propertyId)
+          && isManagerOrAdmin(companyId)
+          && isValidProperty(incoming(), companyId)
+          && hasValidAuditTimestampsOnCreate(incoming())
+          && incoming().createdBy == request.auth.uid;
+        allow update: if isValidId(companyId) && isValidId(propertyId)
+          && isManagerOrAdmin(companyId)
+          && isValidProperty(incoming(), companyId)
+          && hasImmutableBaseOnUpdate(companyId);
+        allow delete: if isValidId(companyId) && isValidId(propertyId) && isCompanyAdmin(companyId);
+      }
+
+      // Projects
+      match /projects/{projectId} {
+        allow get: if isValidId(companyId) && isValidId(projectId) && isActiveMember(companyId);
+        allow list: if isActiveMember(companyId) && resource.data.companyId == companyId;
+        allow create: if isValidId(companyId) && isValidId(projectId)
+          && isManagerOrAdmin(companyId)
+          && isValidProject(incoming(), companyId)
+          && hasValidAuditTimestampsOnCreate(incoming())
+          && incoming().createdBy == request.auth.uid;
+        allow update: if isValidId(companyId) && isValidId(projectId)
+          && isManagerOrAdmin(companyId)
+          && isValidProject(incoming(), companyId)
+          && hasImmutableBaseOnUpdate(companyId);
+        allow delete: if isValidId(companyId) && isValidId(projectId) && isCompanyAdmin(companyId);
+      }
+
+      // Customers
+      match /customers/{customerId} {
+        allow get: if isValidId(companyId) && isValidId(customerId) && isActiveMember(companyId);
+        allow list: if isActiveMember(companyId) && resource.data.companyId == companyId;
+        allow create: if isValidId(companyId) && isValidId(customerId)
+          && isSalesTeam(companyId)
+          && isValidCustomer(incoming(), companyId)
+          && hasValidAuditTimestampsOnCreate(incoming())
+          && incoming().createdBy == request.auth.uid;
+        allow update: if isValidId(companyId) && isValidId(customerId)
+          && isSalesTeam(companyId)
+          && isValidCustomer(incoming(), companyId)
+          && hasImmutableBaseOnUpdate(companyId);
+        allow delete: if isValidId(companyId) && isValidId(customerId) && isCompanyAdmin(companyId);
+      }
+
+      // Site Visits
+      match /siteVisits/{visitId} {
+        allow get: if isValidId(companyId) && isValidId(visitId) && isSalesTeam(companyId) && (
+          userRoleIn(companyId) != 'sales_executive' || existing().agentUid == request.auth.uid || isSuperAdmin()
+        );
+        allow list: if isSalesTeam(companyId) && resource.data.companyId == companyId && (
+          userRoleIn(companyId) != 'sales_executive' || resource.data.agentUid == request.auth.uid || isSuperAdmin()
+        );
+        allow create: if isValidId(companyId) && isValidId(visitId)
+          && isSalesTeam(companyId)
+          && isValidSiteVisit(incoming(), companyId)
+          && hasValidAuditTimestampsOnCreate(incoming())
+          && incoming().createdBy == request.auth.uid;
+        allow update: if isValidId(companyId) && isValidId(visitId)
+          && isSalesTeam(companyId)
+          && isValidSiteVisit(incoming(), companyId)
+          && hasImmutableBaseOnUpdate(companyId)
+          && (
+            isManagerOrAdmin(companyId) ||
+            userRoleIn(companyId) == 'receptionist' ||
+            (userRoleIn(companyId) == 'sales_executive' && existing().agentUid == request.auth.uid)
+          );
+        allow delete: if isValidId(companyId) && isValidId(visitId) && isManagerOrAdmin(companyId);
+      }
+
+      // Deals
+      match /deals/{dealId} {
+        allow get: if isValidId(companyId) && isValidId(dealId) && isActiveMember(companyId) && (
+          userRoleIn(companyId) != 'sales_executive' || existing().agentUid == request.auth.uid || isSuperAdmin()
+        );
+        allow list: if isActiveMember(companyId) && resource.data.companyId == companyId && (
+          userRoleIn(companyId) != 'sales_executive' || resource.data.agentUid == request.auth.uid || isSuperAdmin()
+        );
+        allow create: if isValidId(companyId) && isValidId(dealId)
+          && (isManagerOrAdmin(companyId) || userRoleIn(companyId) == 'sales_executive')
+          && isValidDeal(incoming(), companyId)
+          && hasValidAuditTimestampsOnCreate(incoming())
+          && incoming().createdBy == request.auth.uid;
+        allow update: if isValidId(companyId) && isValidId(dealId)
+          && isActiveMember(companyId)
+          && isValidDeal(incoming(), companyId)
+          && hasImmutableBaseOnUpdate(companyId)
+          && (
+            isManagerOrAdmin(companyId) ||
+            (isFinanceOrAdmin(companyId) && incoming().diff(existing()).affectedKeys().hasOnly(['tokenAmountInr', 'bookingAmountInr', 'paymentMilestones', 'stampDutyInr', 'registrationFeeInr', 'updatedAt'])) ||
+            (userRoleIn(companyId) == 'sales_executive' && existing().agentUid == request.auth.uid && existing().stage != 'Closed Won' && existing().stage != 'Cancelled')
+          );
+        allow delete: if isValidId(companyId) && isValidId(dealId) && isCompanyAdmin(companyId);
+      }
+
+      // Commissions
+      match /commissions/{commissionId} {
+        allow get: if isValidId(companyId) && isValidId(commissionId) && isActiveMember(companyId) && (
+          isFinanceOrAdmin(companyId) || isManagerOrAdmin(companyId) || existing().agentUid == request.auth.uid
+        );
+        allow list: if isActiveMember(companyId) && resource.data.companyId == companyId && (
+          isFinanceOrAdmin(companyId) || isManagerOrAdmin(companyId) || resource.data.agentUid == request.auth.uid
+        );
+        allow create: if isValidId(companyId) && isValidId(commissionId)
+          && (isFinanceOrAdmin(companyId) || isManagerOrAdmin(companyId))
+          && isValidCommission(incoming(), companyId)
+          && hasValidAuditTimestampsOnCreate(incoming())
+          && incoming().createdBy == request.auth.uid;
+        allow update: if isValidId(companyId) && isValidId(commissionId)
+          && isFinanceOrAdmin(companyId)
+          && isValidCommission(incoming(), companyId)
+          && hasImmutableBaseOnUpdate(companyId)
+          && (existing().status != 'paid' || isCompanyAdmin(companyId) || isSuperAdmin());
+        allow delete: if isValidId(companyId) && isValidId(commissionId) && isCompanyAdmin(companyId);
+      }
+
+      // Tasks & Follow-ups
+      match /tasks/{taskId} {
+        allow get: if isValidId(companyId) && isValidId(taskId) && isActiveMember(companyId) && (
+          isManagerOrAdmin(companyId) || existing().assignedTo == request.auth.uid
+        );
+        allow list: if isActiveMember(companyId) && resource.data.companyId == companyId && (
+          isManagerOrAdmin(companyId) || resource.data.assignedTo == request.auth.uid
+        );
+        allow create: if isValidId(companyId) && isValidId(taskId)
+          && isActiveMember(companyId)
+          && isValidTask(incoming(), companyId)
+          && hasValidAuditTimestampsOnCreate(incoming())
+          && incoming().createdBy == request.auth.uid;
+        allow update: if isValidId(companyId) && isValidId(taskId)
+          && isActiveMember(companyId)
+          && isValidTask(incoming(), companyId)
+          && hasImmutableBaseOnUpdate(companyId)
+          && (isManagerOrAdmin(companyId) || existing().assignedTo == request.auth.uid);
+        allow delete: if isValidId(companyId) && isValidId(taskId) && isManagerOrAdmin(companyId);
+      }
+
+      match /followUps/{followUpId} {
+        allow get: if isValidId(companyId) && isValidId(followUpId) && isActiveMember(companyId);
+        allow list: if isActiveMember(companyId) && resource.data.companyId == companyId;
+        allow create: if isValidId(companyId) && isValidId(followUpId)
+          && isActiveMember(companyId)
+          && isValidTask(incoming(), companyId)
+          && hasValidAuditTimestampsOnCreate(incoming())
+          && incoming().createdBy == request.auth.uid;
+        allow update: if isValidId(companyId) && isValidId(followUpId)
+          && isActiveMember(companyId)
+          && isValidTask(incoming(), companyId)
+          && hasImmutableBaseOnUpdate(companyId);
+        allow delete: if isValidId(companyId) && isValidId(followUpId) && isManagerOrAdmin(companyId);
+      }
+
+      // Activities
+      match /activities/{activityId} {
+        allow get: if isValidId(companyId) && isValidId(activityId) && isActiveMember(companyId);
+        allow list: if isActiveMember(companyId) && resource.data.companyId == companyId;
+        allow create: if isValidId(companyId) && isValidId(activityId)
+          && isActiveMember(companyId)
+          && isValidActivity(incoming(), companyId)
+          && hasValidAuditTimestampsOnCreate(incoming())
+          && incoming().createdBy == request.auth.uid;
+        allow update, delete: if false;
+      }
+
+      // Documents
+      match /documents/{documentId} {
+        allow get: if isValidId(companyId) && isValidId(documentId) && isActiveMember(companyId);
+        allow list: if isActiveMember(companyId) && resource.data.companyId == companyId;
+        allow create: if isValidId(companyId) && isValidId(documentId)
+          && isActiveMember(companyId)
+          && isValidDocumentRecord(incoming(), companyId)
+          && hasValidAuditTimestampsOnCreate(incoming())
+          && incoming().createdBy == request.auth.uid;
+        allow update: if isValidId(companyId) && isValidId(documentId)
+          && isCompanyAdmin(companyId)
+          && isValidDocumentRecord(incoming(), companyId)
+          && hasImmutableBaseOnUpdate(companyId);
+        allow delete: if isValidId(companyId) && isValidId(documentId) && isCompanyAdmin(companyId);
+      }
+
+      // Notifications
+      match /notifications/{notificationId} {
+        allow get: if isValidId(companyId) && isValidId(notificationId) && isActiveMember(companyId) && existing().recipientUid == request.auth.uid;
+        allow list: if isActiveMember(companyId) && resource.data.companyId == companyId && resource.data.recipientUid == request.auth.uid;
+        allow create: if isValidId(companyId) && isValidId(notificationId)
+          && isActiveMember(companyId)
+          && isValidNotification(incoming(), companyId)
+          && hasValidAuditTimestampsOnCreate(incoming())
+          && incoming().createdBy == request.auth.uid;
+        allow update: if isValidId(companyId) && isValidId(notificationId)
+          && isActiveMember(companyId)
+          && existing().recipientUid == request.auth.uid
+          && isValidNotification(incoming(), companyId)
+          && hasImmutableBaseOnUpdate(companyId)
+          && incoming().diff(existing()).affectedKeys().hasOnly(['read', 'updatedAt']);
+        allow delete: if isValidId(companyId) && isValidId(notificationId) && isCompanyAdmin(companyId);
+      }
+
+      // Settings
+      match /settings/{settingId} {
+        allow get: if isValidId(companyId) && isValidId(settingId) && isActiveMember(companyId);
+        allow list: if isActiveMember(companyId) && resource.data.companyId == companyId;
+        allow create: if isValidId(companyId) && isValidId(settingId)
+          && isCompanyAdmin(companyId)
+          && isValidCompanySettings(incoming(), companyId)
+          && hasValidAuditTimestampsOnCreate(incoming())
+          && incoming().createdBy == request.auth.uid;
+        allow update: if isValidId(companyId) && isValidId(settingId)
+          && isCompanyAdmin(companyId)
+          && isValidCompanySettings(incoming(), companyId)
+          && hasImmutableBaseOnUpdate(companyId);
+        allow delete: if isValidId(companyId) && isValidId(settingId) && isCompanyAdmin(companyId);
+      }
+
+      // Company Audit Logs (immutable)
+      match /auditLogs/{logId} {
+        allow get: if isValidId(companyId) && isValidId(logId) && isCompanyAdmin(companyId);
+        allow list: if isCompanyAdmin(companyId) && resource.data.companyId == companyId;
+        allow create: if isValidId(companyId) && isValidId(logId)
+          && isVerifiedUser()
+          && isValidAuditLog(incoming())
+          && hasValidAuditTimestampsOnCreate(incoming())
+          && incoming().companyId == companyId
+          && incoming().actorUid == request.auth.uid
+          && incoming().createdBy == request.auth.uid;
+        allow update, delete: if false;
+      }
+    }
+  }
+}
